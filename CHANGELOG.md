@@ -91,6 +91,8 @@ Everything since the imported v1 baseline. It becomes the first release.
 - A first start no longer risks running the machine out of memory while it compiles GPU kernels.
 - The expert's typographic apostrophes and quotes (’ “ ”) reach the voice as written, not as spaces ("I’d" was said
   "I d").
+- Temperatures are read right: the degree sign was dropped before the voice, so the expert's "51°F" was read
+  "fifty-one F". The voice reads it ("fifty one degrees Fahrenheit").
 - A tool turn's answer no longer waits for its lead-in: it's asked for as soon as the tool is back, and a slow
   lead-in is dropped (with an online model, a slow one left up to 2.4 s of silence).
 

@@ -7,8 +7,8 @@ import re
 # Sanitizer: keep letters + digits + basic speakable punctuation, strip markdown/symbols/emoji. \w is Unicode-aware
 # in Python 3, so accented letters in names ("José", "Zürich") survive; an [A-Za-z] whitelist would drop them.
 # Apostrophes and quotes as other writers type them stay too (OpenAI's models write ’ and “ ”; VoxCPM2 reads them and
-# a backtick well): as spaces, "I’d" was said "I d".
-_KEEP = re.compile(r"[^\w\s.,!?;:'’‘ʼ`´\"“”()\-$%]", re.UNICODE)   # $ and % carry meaning ("0.50$", "50%")
+# a backtick well): as spaces, "I’d" was said "I d". So does ° (I-21): without it "51°F" was read "fifty-one F".
+_KEEP = re.compile(r"[^\w\s.,!?;:'’‘ʼ`´\"“”()\-$%°]", re.UNICODE)   # $ and % carry meaning ("0.50$", "50%")
 # Clause dashes -> comma (a pause cue). "Las-Palmas" (unspaced hyphen) and ranges like "5 - 10" / "5–10"
 # (digit on both sides) are left alone.
 _DASH = re.compile(r"\s*[—–]\s*|\s+-(?:\s+|$)")

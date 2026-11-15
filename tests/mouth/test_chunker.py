@@ -139,6 +139,12 @@ def test_typographic_apostrophes_reach_the_voice_as_they_are():
         assert say_clean(text) == text, say_clean(text)
 
 
+def test_degree_sign_reaches_the_voice():
+    """The bug (I-21, live 2026-11-15): the sanitizer dropped °, so the expert's "51°F, or 11°C." reached the voice as
+    "51 F, or 11 C." and was read "fifty-one F". VoxCPM2 reads the sign, so it stays as written."""
+    for text in ("It's 51°F, or 11°C.", "Around 19 °C today, -3° tonight.", "Turn it 90° left."):
+        assert say_clean(text) == text, say_clean(text)
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in list(globals().items()):
