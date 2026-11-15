@@ -39,6 +39,9 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
     model: qwen-3.8-27b
     api_key_env: CEREBRAS_API_KEY
     reasoning_effort: none # the model doesn't think: no reasoning time before the first word
+    extra_body: {stop: ["</think>"]}   # Qwen now and then writes "</think>", then its answer again (1 in
+                                       # ~70 answers after a tool; on both providers): stop there, so only
+                                       # the answer before it is spoken. Streaming is unchanged
     temperature: 0.7
     connect_timeout_s: 1.5 # a failed reply is a short spoken apology: wait a little, not long
     read_timeout_s: 4.0
@@ -52,6 +55,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
     model: qwen-3.8-27b
     api_key_env: CEREBRAS_API_KEY
     reasoning_effort: none
+    extra_body: {stop: ["</think>"]}
     temperature: 0.7
     connect_timeout_s: 1.0
     read_timeout_s: 1.5
@@ -65,6 +69,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
   #   model: qwen/qwen3.8-27b
   #   api_key_env: GROQ_API_KEY
   #   reasoning_effort: none
+  #   extra_body: {stop: ["</think>"]}
   #   temperature: 0.7
   #   connect_timeout_s: 1.5
   #   read_timeout_s: 4.0
@@ -77,6 +82,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
   #   model: qwen/qwen3.8-27b
   #   api_key_env: GROQ_API_KEY
   #   reasoning_effort: none
+  #   extra_body: {stop: ["</think>"]}
   #   temperature: 0.7
   #   connect_timeout_s: 1.0
   #   read_timeout_s: 1.5
