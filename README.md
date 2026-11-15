@@ -44,6 +44,9 @@ DEVELOPING.md has the details.
 - **An NVIDIA GPU with ~28 GB of memory** for the default models at 4 conversations (Gemma 4 E4B FP8 ~15 GB, VoxCPM2
   ~9 GB, EARS ~4 GB), so a 32 GB card is enough. Other models need more or less. Tested on an RTX 5090, RTX PRO 5000
   and RTX PRO 4500 (slower: see "Known limits"); other GPUs should work, but aren't tested.
+- **Or a 16 GB card, with `config/hosted.yaml`:** the language model runs online (Cerebras), and only the voice and
+  the turn-taking model use the GPU: 12.9 GB at 4 conversations on an RTX 5080. Its disk need is ~20 GB (the models
+  ~7 GB). See "Plugins" for its speed and price, and "Privacy" for what it sends.
 - **An NVIDIA driver for CUDA 13** (version 590 or newer). That's what we test on; CUDA 12 should work too, but isn't
   tested.
 - **About 60 GB of free disk.** The models take about 25 GB of it.
@@ -343,6 +346,7 @@ and their code is in `app/plugins/`. Each block names its `plugin:`, then that p
 | Kind | Plugin | Runs on | What it is |
 |---|---|---|---|
 | LLM | `gemma-4-e4b` | your GPU | **answers you:** `google/gemma-4-E4B-it` in FP8, text only, no "thinking" step |
+| LLM | `openai-chat` | online | **answers you online** (`config/hosted.yaml`): any Chat Completions API, e.g. Cerebras or Groq, with Qwen 3.8 27B |
 | LLM | `openai-responses` | online | **the expert** (`smart`): OpenAI's Responses API, with web search |
 | LLM | `anthropic` | online | another expert: Claude (`claude-opus-5-5` by default) |
 | Voice | `voxcpm2` | your GPU | voices cloned from `voices/` |
@@ -357,9 +361,12 @@ Gemma 4 E4B did better than the 10 other models we measured for answering (DEVEL
 - `llm.smart` (optional) is the expert.
 
 Any job can use any LLM plugin; if two blocks use the same plugin, give each a `name:`. Keys go in `.env`, under the
-name the block's `api_key_env` gives. `reply` and `filler` stay on your GPU because online models were slower: the
-voice started ~0.35 s later, and "mm-hm"s ~0.55 s later. If an online request fails, the agent says a short apology;
-if the model refuses, a short neutral line.
+name the block's `api_key_env` gives. By default `reply` and `filler` stay on your GPU. `config/hosted.yaml` puts them
+on Cerebras (`CEREBRAS_API_KEY`), for a 16 GB card. On an RTX 5080 the voice then starts ~0.9 s after you stop
+talking (~1.0 s with 4 conversations; an RTX 5090 with Gemma: 0.7 / 0.75 s), and "mm-hm"s ~0.3 s after their cue
+(~0.45 s with 4). Cerebras costs about $0.04 per 3-minute conversation, or $0.08 with the expert and tasks on (their
+longer prompt; the expert's own OpenAI calls not counted). If an online request fails, the agent says a short
+apology, and skips an "mm-hm" or a lead-in; if the model refuses, a short neutral line.
 
 To add a plugin or a tool, see DEVELOPING.md.
 
@@ -405,8 +412,13 @@ mouth:
   timings and event types. Tokens aren't logged either. The page gets your words back only to show them.
 - **Voice clips stay where you put them:** in `voices/`, or in an image you build.
 - **Online models only get text, and only if your settings use one.** The expert gets the question, your words and
-  the last few turns (`context_turns`), but not tool results. An online `reply` or `filler` model would get every
-  turn. Audio and voice clips are never sent.
+  the last few turns (`context_turns`), but not tool results. Audio and voice clips are never sent.
+- **With `config/hosted.yaml`, the provider gets every turn:** your words, the last turns (`history_turns`) and the
+  tool results, and the partial words behind each "mm-hm".
+  - **Cerebras** (the default there): doesn't keep the data, by its privacy policy, but makes no zero-retention
+    promise for the API, and may process it outside the US.
+  - **Groq** (the commented blocks): keeps no data by default, stores in the US. Turn on zero data retention in its
+    console (Data Controls) before you use it.
 - **What's sent to online models is never logged,** and MOUTH won't start if the OpenAI or Anthropic SDK's debug
   logging is on (`OPENAI_LOG` / `ANTHROPIC_LOG` = `debug`). Only use online models under terms you accept.
 
@@ -422,8 +434,9 @@ says otherwise. Other models or GPUs will give different ones.
 - **English only.**
 - **`set_reminder` and `send_message` don't work yet:** the agent says they aren't connected.
 - **Response time,** from when you stop talking to when the agent's voice starts: about 0.7 s on an RTX 5090 (0.75 s
-  with 4 conversations), and about 0.8 s on an RTX PRO 4500 (1.15 s with 4). About 0.5 s of that is spent
-  making sure you've finished; better-tuned settings should cut it.
+  with 4 conversations), about 0.8 s on an RTX PRO 4500 (1.15 s with 4), and about 0.9 s on an RTX 5080 with
+  `config/hosted.yaml` (1.0 s with 4). About 0.5 s of that is spent making sure you've finished; better-tuned
+  settings should cut it.
 
 ## Licence
 

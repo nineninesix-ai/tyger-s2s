@@ -355,6 +355,27 @@ README → "API mode" has the settings; this is how they work.
   run.
   - `openai-responses`: OpenAI's Responses API with its built-in web search, `store: false`. History maps to
     Responses items (`function_call` / `function_call_output`).
+  - `openai-chat`: any Chat Completions API, for `reply` and `filler` (`config/hosted.yaml`: Cerebras, Groq in
+    comments). Nothing in it names a provider: `base_url`, `model`, `api_key_env` and `extra_body` say which.
+    - Streamed. `delta.reasoning` is never read. Tool calls come in pieces and are parsed at the end; a call cut off
+      at the token limit isn't run. `max_completion_tokens` only (Cerebras takes `max_tokens` as an alias).
+    - `reasoning_effort: none`: Qwen 3.8 27B doesn't think. It still wrote `</think>` and its answer again now and
+      then (1 in ~70 answers after a tool, on both providers), so each block stops there (`extra_body: {stop:
+      ["</think>"]}`).
+    - The warm connection: `warmup()` sends a free `GET /models`, idle connections stay open `keepalive_s` (120 s),
+      and `ping_s: 10` sends another while a conversation is on. After 30 s of quiet that cut first text from
+      299 / 766 ms (p50 / p90) to 216 / 295 on Cerebras. The connection stays open either way: the gain is on the
+      provider's side.
+    - Timeouts: the filler fails fast (connect 1.0 s, read 1.5 s, no retry), the reply waits a little longer
+      (connect 1.5 s, read 4 s, one retry). A stalled provider costs the reply ~6 s before its apology.
+    - Counts per instance in `plugin.usage` (requests, prompt, cached, completion tokens).
+    - **Cerebras** caches the reply's prompt: 4096 of its ~4.2k tokens on every turn after the first. The fillers'
+      shorter prompts are never cached. Cached tokens are billed at the full price, and count toward the 750K total
+      tokens a minute but not the 150K uncached: one key runs ~170 reply requests a minute.
+    - **Groq** is on hold (2026-11-15): its Qwen is a preview, it doesn't cache, and the account had 8,000 tokens a
+      minute: under two reply requests.
+    - Routing on a hosted reply: `escalation.py --opt max_concurrency=1 --opt queue_timeout_s=3600 --opt
+      max_retries=3`, or the total-token limit stops it with 429s.
   - `anthropic`: the Claude Messages API, default `claude-opus-5-5` with `effort: low` and the server-side refusal
     fallback.
     - Opus 5.5 always thinks, so `max_tokens` covers thinking and text, and no `temperature` is sent.
@@ -415,6 +436,11 @@ README → "API mode" has the settings; this is how they work.
     cache fragmented past 9 GiB.
 - **Headroom.** A 5090 (32.6 GB) is left with ~4.7 GB, and a 48 GB RTX PRO 5000 with ~21 GB. Measure before adding
   anything.
+- **With no LLM on the GPU** (`config/hosted.yaml`), measured on an RTX 5080 (16.3 GB), 2026-11-15:
+  - idle 12.16 GB (VoxCPM2 8.99, EARS 3.15), peak 12.68 GB at 1 conversation and 12.90 GB at 4, ~3.4 GB left;
+  - VoxCPM2's KV stays pinned at 2 GiB (58,240 tokens of 36 layers); its `gpu_memory_utilization: 0.35` start-up
+    check passes on 16 GB;
+  - 10 minutes at 4 conversations: +46 MiB on the GPU, flat after the first minutes; the processes' RAM flat.
 - **No memory work is planned** (the user, 2026-10-13: it fits the 5090). The figures above are estimates, not
   measurements. Don't cut anything unless the stack grows past the card.
 
@@ -718,6 +744,7 @@ the last row is an RTX PRO 4500 Blackwell, in Docker. Compare numbers only withi
 | 2026-10-13 | the four characters (Mira's), same box | 276 ms (one sample) | 426–454 ms (3 runs) | 730 / 777–780 ms (one reply text again) | 30.2 GB |
 | 2026-10-13 | `2fc97c7`, EARS on `tyger-s2s` (now `tyger`; ep_thr 0.915, barge 0.5, bc 0.4), same box | — | 431–475 ms (3 runs) | 711 / 746 ms | 27.9 GB |
 | 2026-10-13 | `6ed9c49` (Mira shorter, tyger @ `cd826db`), no `smart`, in the Docker image on a new host: an RTX PRO 4500 Blackwell (32 GB, ECC on), 8 vCPUs; the box and Docker together | 436 ms (one sample) | 687–727 ms (3 runs) | 819 / 1150 ms | 27.2 GB |
+| 2026-11-15 | `553a023`, `config/hosted.yaml` (reply and filler on Cerebras, no LLM on the GPU), no `smart`, voice `rex` (the only clip): an RTX 5080 (16.3 GB) in a Vast.ai container, Ryzen 9 9950X | 282 ms | 417–436 ms (3 runs) | 842–888 / 975–1019 ms (3 runs each) | 12.9 GB |
 
 The voice changes the end-of-speech numbers: `load_ears.py` speaks its utterance in the default voice, and with the
 `ori` clip the endpoint comes ~100 ms sooner than on the last box. Since the characters, `load_ears.py`'s "count to
@@ -730,6 +757,37 @@ The RTX PRO 4500 (the last row) has about half the 5090's memory bandwidth, and 
 → first audio 315 / 563 ms p50 at 1 / 4 conversations, while detection (510 / 657 ms) and the hop lag (p50 24 / 56,
 p90 44 / 117 ms) stay near the 5090's. The box and Docker weren't told apart: no host run (the user's call; the host
 had no CUDA toolkit).
+
+**The RTX 5080 with a hosted `reply` and `filler`** (the last row; 2026-11-15, Cerebras `qwen-3.8-27b`,
+`reasoning_effort: none`, from Florida). p50 / p90 / max, in ms:
+
+| | 1 conversation | 4 conversations |
+|---|---|---|
+| End of speech → first audio (`load_ears.py`, p50 of 3 runs) | 842 / 880 / 888 | 975 / 985 / 1019 |
+| … of which detection; endpoint → first audio (p50) | 576–584; 280–310 | 640–648; 345–365 |
+| Hop lag p50 / p90 | 18–19 / 27–36 | 42–43 / 77–81 |
+| Backchannel, `C` → `K` (`load.py`) | 278–297 / 292–311 / 495 | 417–463 / 568–886 / 1540 |
+| Tool turn, `T` → the lead-in's first audio (`load.py --tools --fresh`) | 529 / 575 / 632 | 592 / 952 / 2379 |
+| VoxCPM2 alone: first audio; RTF p50 | 78 / 81 / 81; 0.109 | 141 / 148 / 148; 0.150 |
+
+- **The provider alone** (requests from the box, synthetic turns, 270 requests, no errors): first text, warm,
+  backchannel 199 / 346 / 808, lead-in 193 / 215 / 993, reply 309 / 372 / 798 (the ~4.2k-token prompt with the
+  expert and tasks). The last token comes ~5 ms after the first: these outputs arrive almost whole. The TLS round
+  trip is ~70 ms.
+- **Against the 5090 with Gemma** (711 / 746 ms at 1 / 4 conversations): ~170 ms more at 1 conversation and ~240
+  ms more at 4. Detection is slower here too (the `rex` voice; it varies by voice, see below). Against the RTX
+  PRO 4500 with Gemma (819 / 1150), MOUTH is as fast at 1 conversation and ~200 ms faster at 4.
+- **Tool turns pay two round trips** before the lead-in: the reply's call, then the filler's line. When the
+  filler is slow, the turn waits for its 1.5 s timeout: two of 72 tool turns at 4 conversations spoke the answer
+  only at ~2.4 s.
+- **10 minutes at 4 conversations** (12 `load_ears.py` runs, 192 turns): hop lag and end of speech → first audio
+  flat (p50 961–1037 ms per run).
+- **Start:** the first ~8.5 min (the page build, ~7 GB of models, compiles); then 66 s.
+- **Cost per 3-minute conversation,** estimated from the measured token counts at list price, for 15 turns (2 of
+  them tool turns) and 10 backchannels: Cerebras $0.038 with the stack's prompt (1.5k tokens, no expert), $0.083
+  with the expert and tasks (4.2k); cached tokens cost the same. Groq would be $0.032 / $0.068 (cheaper input, no
+  cache). The expert's own OpenAI calls aren't counted. The RTX 5080 cost $0.44 an hour on Vast.ai: $0.022 per
+  3-minute place, $0.0055 a conversation with all 4 places in use.
 
 "End of speech → first audio" is what the user hears as the response gap. About 500–850 ms of it is endpoint
 detection, which live tuning of the endpoint thresholds is meant to cut (O-01).
@@ -755,6 +813,13 @@ decode runs near the bandwidth ratio, and EARS has less compute on the PRO 5000.
 | Kai | 98.8% | 1.9% | 0.0% | 100.0% |
 | Rex | 99.4% | 0.9% | 1.4% | 100.0% |
 | Ori (gone; same box, for comparison) | 99.7% | 0.5% | 0.0% | 99.4% |
+| Mira on Cerebras `qwen-3.8-27b` (`config/hosted.yaml`, 2026-11-15) | 97.7% | 2.1% | 0.0% | 98.0% (tool → local 9.4%) |
+
+With the hosted reply, the misses with the expert are much like Gemma's (a palindrome function, the bat-and-ball
+sum, a recession explained locally; 4 background tasks answered at once, in 5 samples). Without the expert, 5 of 6 tool calls
+it skipped were reminders and messages it said weren't connected without calling the tool (the tool says so too);
+the 6th made up a time. One sample spoke reasoning before a call ("(Thinking: The user is asking about…"). The
+prompts were tuned on Gemma and aren't changed for Qwen.
 
 The misses are mostly explanations answered locally (how TCP's handshake works, why the sky is blue "with the actual
 physics"); a "tool → local" of 1.4% is one sample of a message request in 72.

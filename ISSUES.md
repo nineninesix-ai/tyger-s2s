@@ -17,6 +17,9 @@ What is left to do, by ID. IDs are stable: put them in commit subjects ("Fix I-2
 | ID | Area | Severity | Status | One line |
 |---|---|---|---|---|
 | I-20 | smart | medium | open | The expert calls `get_current_time` before most answers; once an empty answer, once a "Dummy" reminder |
+| I-29 | MOUTH | medium | open | After two failed turns, a hosted reply answers with MOUTH's apology instead |
+| I-30 | MOUTH | medium | open | A hosted tool turn waits for two round trips before its lead-in, and asks for the answer only after the lead-in |
+| I-31 | LLM | low | open | `gemma-4-e4b` doesn't check its tool calls' arguments; the check lets undeclared fields through |
 | I-18 | EARS | medium | accepted for now | With a clean mic, an "mm-hm" in the agent's pause barges |
 | I-28 | EARS | medium | open | The loader requires `HF_TOKEN`, though the model is public |
 | I-26 | EARS | low | open (not seen live) | With echo in the mic (−30 dB), tyger barges on the agent's own voice |
@@ -62,6 +65,54 @@ user's OK each time.
 
 **Verify:** the live check's questions as plugin-level probes, with the user's OK: time rounds per answer, no empty
 answers, no action calls.
+
+---
+
+## The hosted reply (`config/hosted.yaml`)
+
+Found on an RTX 5080 with `reply` and `filler` on Cerebras (`qwen-3.8-27b`), 2026-11-15 (DEVELOPING.md →
+"Benchmarks"). Calls to the provider for these checks need the user's OK.
+
+### I-29 — After two failed turns, a hosted reply answers with MOUTH's apology instead (medium, confirmed)
+**What happens:** a failed reply request is answered with MOUTH's own line ("Sorry, I couldn't get an answer just
+now. Could you say that again?"), and `speak_line` keeps it in history as the agent's answer. With two of them in
+the history, Qwen 3.8 27B answered the next turn with the same apology in 13 of 20 tries, with the provider
+working again (a time question it otherwise looks up 20 of 20 times). With one apology: 0 of 60. So after a short
+outage the agent can keep apologising for a few turns.
+
+**Where:** `Turn.speak_line` in `app/mouth/turns.py` (`self.remember(transcript, line)`), called by `ReplyTurn` in
+`app/mouth/reply.py`.
+
+**Fix options** (the user's call): keep the user's turn but not MOUTH's line; or keep the line with a note that it
+was MOUTH's, not the model's; or drop the failed turn (the user is asked to say it again). Check Gemma too.
+
+**Verify:** the history of two failed turns, then the time question, 20 times: the tool is called every time.
+
+### I-30 — A hosted tool turn waits for two round trips before its lead-in (medium, confirmed)
+**What happens:** the lead-in is asked for when the reply's call arrives, so its first audio comes after two
+requests in a row: `T` → lead-in audio 529 / 575 ms (p50 / p90) at 1 conversation, 592 / 952 at 4 (a plain turn:
+~340 / ~420). And the answer after the tool is asked for only once the lead-in is done, even when the tool's
+result is in long before: when the lead-in is slow, the turn waits for the filler's 1.5 s timeout, then asks for
+the answer. 2 of 72 tool turns at 4 conversations spoke the answer only at ~2.4 s. A stalled provider also keeps a
+reply waiting ~6 s before its apology (read 4 s, a retry, connect 1.5 s).
+
+**Where:** `ReplyTurn._tool_turn` in `app/mouth/reply.py`: the lead-in, then `Turn.cover` (`app/mouth/turns.py`)
+until the tool is done, then the answer's request. The timeouts are in `config/hosted.yaml`.
+
+**Fix options:** ask for the answer as soon as the tool's result is in, beside the lead-in, and play them in order;
+when the answer is ready first (a quick tool, like the time), skip the lead-in. Shorter timeouts (the filler's read
+1.0 s, the reply's 2 s), measured against the provider's tail (max ~1.1 s for a filler, ~0.8 s for a reply with
+the keep-alive). (Asking for the lead-in at `tool_start` instead of at the parsed call doesn't help on Cerebras: it
+sends the call in one piece.)
+
+### I-31 — `gemma-4-e4b` doesn't check its tool calls' arguments (low, confirmed in code)
+Found during the CPU trial (2026-11-14). The hosted plugins pass every call through `calls.flag_invalid`, so a call
+that doesn't fit the offered schema is never run; the local plugin (`app/plugins/llm/local/`) doesn't. And
+`check_arguments` lets arguments the schema doesn't declare through: it checks the required keys and the types and
+enums of declared ones only.
+
+**Fix:** call `flag_invalid` in the local plugin's tool-call path, as the hosted ones do, and have
+`check_arguments` reject undeclared keys (the schemas have no `additionalProperties`), with a failing test first.
 
 ---
 

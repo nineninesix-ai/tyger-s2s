@@ -20,6 +20,8 @@ Everything since the imported v1 baseline. It becomes the first release.
 - **Interrupted lookups carry on:** cut in before hearing an answer, and it's still found and told to you later.
 - **`openai-responses` plugin:** OpenAI's Responses API with web search, the default expert.
 - **`anthropic` plugin:** Claude as the alternative expert (not yet tested against the API).
+- **`openai-chat` plugin and `config/hosted.yaml`:** `reply` and `filler` on a hosted Chat Completions API
+  (Cerebras; Groq in comments), so a 16 GB card runs the rest (12.9 GB on an RTX 5080 at 4 conversations).
 - **`fake` plugins** and `config/fake.yaml`: the whole stack runs on a CPU, with no downloads.
 - **All prompts in one file,** `config/prompts.yaml`, checked at startup.
 - **Config checks:** a typo in the config stops startup and names the key.
