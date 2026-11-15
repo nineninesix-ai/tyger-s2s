@@ -43,6 +43,8 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
     connect_timeout_s: 1.5 # a failed reply is a short spoken apology: wait a little, not long
     read_timeout_s: 4.0
     max_retries: 1
+    ping_s: 10.0           # a free request (GET /models) every 10 s while a conversation is on: after 30 s
+                           # quiet, first text p50/p90 216/295 ms with it, 299/766 without (DEVELOPING.md)
   filler:                  # backchannels, tool lead-ins, still-looking lines: text only, no tools
     plugin: openai-chat
     name: filler           # its own instance, with short timeouts: a late backchannel is worse than none
@@ -54,6 +56,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
     connect_timeout_s: 1.0
     read_timeout_s: 1.5
     max_retries: 0
+    ping_s: 10.0
   # Groq instead of the two blocks above: the same model, a preview there, and Groq doesn't cache its prompt.
   # Turn on zero data retention in Groq's console (Data Controls) first.
   # reply:
@@ -66,6 +69,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
   #   connect_timeout_s: 1.5
   #   read_timeout_s: 4.0
   #   max_retries: 1
+  #   ping_s: 10.0
   # filler:
   #   plugin: openai-chat
   #   name: filler
@@ -77,6 +81,7 @@ llm:                       # MOUTH's LLM roles; each block is one plugin instanc
   #   connect_timeout_s: 1.0
   #   read_timeout_s: 1.5
   #   max_retries: 0
+  #   ping_s: 10.0
   smart:                   # optional: answers turns the reply model escalates (ask_expert), live facts included,
     plugin: openai-responses   # and runs background tasks. HOSTED: escalated turns and their
     model: gpt-5.4-mini    # mouth.escalation.context_turns of transcript go to OpenAI; it searches the web there
