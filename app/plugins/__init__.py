@@ -7,6 +7,7 @@ REGISTRY = {
     "llm": {"gemma-4-e4b": "app.plugins.llm.local.gemma4.plugin:Gemma4E4B",       # the responder (FP8 at load)
             # hosted: transcripts leave the box
             "openai-responses": "app.plugins.llm.hosted.openai_responses:OpenAIResponsesLLM",   # OpenAI web search
+            "openai-chat": "app.plugins.llm.hosted.openai_chat:OpenAIChatLLM",   # any Chat Completions API
             "anthropic": "app.plugins.llm.hosted.anthropic:AnthropicLLM",
             "fake": "app.plugins.llm.fake:FakeLLM"},
     "tts": {"voxcpm2": "app.plugins.tts.voxcpm2:VoxCPM2",

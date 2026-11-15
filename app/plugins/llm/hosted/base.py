@@ -1,5 +1,5 @@
-"""HostedLLM: what the hosted LLM plugins (openai-responses, anthropic) share. Each subclass names its SDK and writes
-its request and stream parsing; this base does the rest the same way for both:
+"""HostedLLM: what the hosted LLM plugins (openai-responses, openai-chat, anthropic) share. Each subclass names its
+SDK and writes its request and stream parsing; this base does the rest the same way for all:
 
   * the API key from the env var `api_key_env` (.env); missing -> the plugin refuses to start, naming the var;
   * the SDK's debug logging (`<SDK>_LOG=debug`) prints request bodies, i.e. transcripts: the plugin refuses to start;
@@ -9,7 +9,8 @@ its request and stream parsing; this base does the rest the same way for both:
     LLMError("busy");
   * the SDK's typed errors -> LLMError (rate_limit, timeout, connection, server, request), and MOUTH speaks a
     short apology. 429s are counted and logged; bodies never are;
-  * no warmup (a request would cost money; the first turn pays the connection set-up); shutdown closes the client.
+  * no warmup by default (a request would cost money; the first turn pays the connection set-up; openai-chat opens
+    its connection with a free request); shutdown closes the client.
 """
 from __future__ import annotations
 import asyncio, importlib, logging, os

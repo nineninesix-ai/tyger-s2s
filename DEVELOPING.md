@@ -628,6 +628,8 @@ own web search.
   tests/plugins/test_calls_gemma4.py    Gemma 4's call format and gemma-4-e4b's stream on it
   tests/plugins/test_calls_hermes.py    Hermes JSON, the fake LLM's call format
   tests/plugins/test_hosted_openai_responses.py   openai-responses on stubbed streams; citations cut from the text
+  tests/plugins/test_hosted_openai_chat.py        openai-chat on stubbed streams: reasoning dropped, tool calls in
+                                                  pieces, the request's keywords, errors mid-stream, the warm connection
   tests/plugins/test_hosted_anthropic.py          anthropic on stubbed streams
   ```
 - **The page's own check** (node ≥ 18): `cd tests/page && npm install && node page_check.mjs`. It covers the mic
