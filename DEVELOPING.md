@@ -251,8 +251,10 @@ README → "API mode" has the settings; this is how they work.
   1. The plugin emits `tool_start` as soon as the tool's name has decoded.
   2. A helper thread finishes decoding the call and runs the tools the moment it parses. Meanwhile the turn speaks a
      lead-in that fits the tool, made by `filler` and batched with the call.
-  3. If the tools are still out 0.8 s after the last line played, one more "still looking" line, at most 2.
-  4. `reply` answers from the results (phase B).
+  3. `reply`'s answer from the results (phase B) is asked for on that thread as soon as they're in, under the
+     lead-in, and spoken after it. If the answer starts before the lead-in's line has come, the lead-in is dropped
+     and its request stopped (I-30: with a hosted LLM, a slow lead-in held the answer back).
+  4. If the answer still hasn't started 0.8 s after the last line played, one more "still looking" line, at most 2.
 - **Escalation** (`ask_expert`, only with `smart`):
   - The smart request starts the moment the call parses, under the lead-in.
   - It gets the smart prompt, the last `context_turns` turns as plain text (tool calls and results dropped), the
@@ -778,8 +780,11 @@ had no CUDA toolkit).
   ms more at 4. Detection is slower here too (the `rex` voice; it varies by voice, see below). Against the RTX
   PRO 4500 with Gemma (819 / 1150), MOUTH is as fast at 1 conversation and ~200 ms faster at 4.
 - **Tool turns pay two round trips** before the lead-in: the reply's call, then the filler's line. When the
-  filler is slow, the turn waits for its 1.5 s timeout: two of 72 tool turns at 4 conversations spoke the answer
-  only at ~2.4 s.
+  filler was slow, the turn waited for its 1.5 s timeout, and only then asked for the answer: two of 72 tool turns
+  at 4 conversations spoke the answer only at ~2.4 s. Since then the answer is asked for under the lead-in, and a
+  lead-in slower than it is dropped (I-30's second half): the same 72 tool turns then gave p50 / p90 / max
+  602 / 715 / 1000 ms, none over 1 s (were 592 / 952 / 2379, 5 over 1 s); 22 of the 72 dropped their lead-in for
+  an answer that came first.
 - **10 minutes at 4 conversations** (12 `load_ears.py` runs, 192 turns): hop lag and end of speech → first audio
   flat (p50 961–1037 ms per run).
 - **Start:** the first ~8.5 min (the page build, ~7 GB of models, compiles); then 66 s.

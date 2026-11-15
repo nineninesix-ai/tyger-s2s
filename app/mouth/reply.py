@@ -2,10 +2,12 @@
 
 A plain reply is spoken as it decodes. On a tool call (L-04) the call's name has just decoded: a helper thread
 finishes decoding the call and runs the tools the moment it parses (a ToolRound), while this thread speaks a lead-in
-that fits the tool, made alongside (vLLM batches the two requests). If the tools are still out FILLER_GAP_S after
-the last line has played, one more short "still looking" line, up to MAX_STILL. Then the reply model answers from
-the results (phase B). Escalation (ask_expert, only with an `llm.smart` block): the smart request starts right after
-the other tools, still under the lead-in, and its answer streams straight to the TTS, with its own tool rounds
+that fits the tool, made alongside (vLLM batches the two requests). The reply model's answer from the results (phase
+B) is asked for on that thread as soon as they're in, under the lead-in, and spoken after it; an answer that comes
+before the lead-in's line drops the lead-in (I-30: with a hosted LLM each is a round trip, and a slow lead-in held
+the answer back). If the answer still hasn't started FILLER_GAP_S after the last line has played, one more short
+"still looking" line, up to MAX_STILL. Escalation (ask_expert, only with an `llm.smart` block): the smart request
+starts the same way, instead of phase B, and its answer streams straight to the TTS, with its own tool rounds
 covered the same way. Everything said stops on barge-in (the stop flag); helper threads are daemons.
 
 A barge before any of the answer was heard doesn't lose the round (I-16). A call that has started decoding decodes
@@ -33,13 +35,15 @@ RESULT_WAIT_S = 60.0       # a barged round's results still out: history takes t
 @dataclass
 class ToolRound:
     """One round of tool calls, finished on a helper thread while the turn speaks over it. `next` is the stream that
-    answers from the results when it was started there already (the smart model's), with `next_msgs` its request."""
+    answers from the results, started there as soon as they're in, with `next_msgs` its request: the smart model's
+    (`smart`), else the reply model's (phase B)."""
     calls: list
     native: Any = None
     results: list = field(default_factory=list)
     error: Exception | None = None
     next: Prefetch | None = None
     next_msgs: list | None = None
+    smart: bool = False                          # `next` is the smart model's answer (ask_expert)
     t0: float | None = None                      # when `next` was requested
     parsed: threading.Event = field(default_factory=threading.Event)   # the calls have decoded (or never will)
     done: threading.Event = field(default_factory=threading.Event)     # the tools are back
@@ -47,6 +51,11 @@ class ToolRound:
     def finished(self):
         """The tools are back and, if an answer was started, its first event too: time to stop covering."""
         return self.done.is_set() and (self.next is None or self.next.ready.is_set())
+
+    def answer_first(self):
+        """The reply model's answer (phase B) has started: a lead-in still to come is dropped (I-30)."""
+        nxt = self.next
+        return nxt is not None and not self.smart and nxt.ready.is_set()
 
     def back(self):
         """[(call, result)] once the tools are back; [] before, or if they never ran."""
@@ -99,16 +108,19 @@ class ReplyTurn(Turn):
     def _tool_turn(self, msgs, events, content, calls, native, started):
         m, t = self.m, self.transcript
         rnd = self._round(calls, native)
-        threading.Thread(target=self._finish_call_and_run_tools, args=(events, rnd), daemon=True).start()
+        threading.Thread(target=self._finish_call_and_run_tools, args=(events, rnd, msgs, content),
+                         daemon=True).start()
         tool = started["name"] if started else (calls[0]["name"] if calls else None)
         to_expert = m.expert and tool == EXPERT
         fillers = []
         if not self.speaker.said:              # the model's own words before the tag already did the job
             section = "expert_leadin" if to_expert else "tool_leadin"
             fp = m.prompts["filler"]
-            line = yield from self.filler(section, fp.fill(section, "user", transcript=t))
+            line = yield from self.filler(section, fp.fill(section, "user", transcript=t), skip_if=rnd.answer_first)
             if line:
                 fillers.append(line)
+            elif rnd.answer_first():
+                log.info("tool turn: the answer came before the lead-in; lead-in dropped")
         yield from self.cover(rnd.finished, "expert_still" if to_expert else "still_looking", t, fillers)
         if self.stop():
             yield from self._barged_round(content, fillers); return
@@ -123,12 +135,12 @@ class ReplyTurn(Turn):
 
         kept = round_messages(content, calls, rnd.native, results, compact=True)
         answer_from = len(self.speaker.said)                # the answer's lines start here
-        if rnd.next is not None:                            # escalated: the smart model answers, straight to TTS
+        if rnd.smart:                                       # escalated: the smart model answers, straight to TTS
             answer, refused = yield from self._expert_answer(rnd, fillers)
-        else:
-            msgs2 = msgs + round_messages(content, calls, rnd.native, results)
-            answer, _, _, _, refused = yield from self.speak_stream(
-                m.llms["reply"].stream(msgs2, max_new=m.max_gen, stop_flag=self.stop))
+        else:                                               # phase B, under way since the results came back
+            stream = rnd.next or m.llms["reply"].stream(msgs + round_messages(content, calls, rnd.native, results),
+                                                        max_new=m.max_gen, stop_flag=self.stop)
+            answer, _, _, _, refused = yield from self.speak_stream(stream)
         if refused and not self.stop():
             yield from self.speak_line("refusal", t); return
         lead = " ".join(fillers)
@@ -144,10 +156,10 @@ class ReplyTurn(Turn):
             self.remember(t, answer.strip() or lead, kept)
         yield ("done", (lead + " " + answer).strip())
 
-    def _finish_call_and_run_tools(self, events, rnd):
-        """(helper thread) Finish decoding the call, run the tools, and for ask_expert start the smart model. After a
-        barge the call still decodes and the tools still run (the round may go on as a task); the smart model isn't
-        asked."""
+    def _finish_call_and_run_tools(self, events, rnd, msgs, content):
+        """(helper thread) Finish decoding the call, run the tools, and ask for the answer from the results: the smart
+        model's for ask_expert, else the reply model's (phase B). After a barge the call still decodes and the tools
+        still run (the round may go on as a task); no answer is asked for."""
         try:
             for ev in events:                               # no-op if speak_stream already drained it
                 if ev[0] == "tool_calls":
@@ -157,9 +169,13 @@ class ReplyTurn(Turn):
                 return
             log.info("tool calls: %s", [c["name"] for c in rnd.calls])
             rnd.results = self.run_calls(rnd.calls, expert=self.m.expert, transcript=self.transcript)
+            if self.stop():
+                return
             ask = next((c for c in rnd.calls if c["name"] == EXPERT and not c.get("error")), None)
-            if ask is not None and self.m.expert and not self.stop():
+            if ask is not None and self.m.expert:
                 self._start_smart(rnd, ask)
+            else:
+                self._start_answer(rnd, msgs, content)
         except Exception as e:
             rnd.error = e
             log.warning("tool call error: %s", type(e).__name__)
@@ -245,9 +261,18 @@ class ReplyTurn(Turn):
         if done:                                            # deeper follow-ups on a task get its full result
             rnd.next_msgs[-1]["content"] += m.prompts["smart"].fill(
                 "tasks", "expert_context", results="; ".join(f'#{t.id} "{t.goal}": {r}' for t, r in done))
-        rnd.t0 = time.perf_counter()
+        rnd.t0 = time.perf_counter(); rnd.smart = True
         rnd.next = Prefetch(lambda: m.llms["smart"].stream(rnd.next_msgs, tools=m.smart_tools, max_new=m.max_gen,
                                                            stop_flag=self.stop), self.stop)
+
+    def _start_answer(self, rnd, msgs, content):
+        """Request the reply model's answer from the results (phase B) now, under the lead-in (I-30)."""
+        m = self.m
+        results = rnd.results if len(rnd.results) == len(rnd.calls) else [None] * len(rnd.calls)
+        rnd.next_msgs = msgs + round_messages(content, rnd.calls, rnd.native, results)
+        rnd.t0 = time.perf_counter()
+        rnd.next = Prefetch(lambda: m.llms["reply"].stream(rnd.next_msgs, max_new=m.max_gen, stop_flag=self.stop),
+                            self.stop)
 
     def run_calls(self, calls, expert=False, transcript=""):
         """Run one round of tool calls at once; results in call order (app/tools). With `expert`, ask_expert gets a

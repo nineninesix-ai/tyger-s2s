@@ -9,7 +9,7 @@ stream chunk by chunk, MOUTH's own spoken lines, fillers over tool latency, and 
   * SayTurn: speak a given text, TTS only (test tools use it for a fixed utterance; never remembered).
 """
 from __future__ import annotations
-import logging, queue, time
+import logging, queue, threading, time
 
 from app.mouth.chunker import next_chunk
 from app.mouth.messages import with_shots, still_user, compact_result
@@ -91,25 +91,35 @@ class Turn:
         yield ("done", line)
 
     # ---- fillers: short lines spoken over tool latency, made on a helper thread ----
-    def filler(self, section, user):
+    def filler(self, section, user, skip_if=None):
         """Speak one filler line, made on a helper thread (config/prompts.yaml `section`: system prompt + few-shot
-        turns, then `user`). Yields its events as this turn's reply; returns the line (None if there was none)."""
-        return (yield from self._relay(spawn(lambda: self._make_filler(section, user))))
+        turns, then `user`). Yields its events as this turn's reply; returns the line (None if there was none).
+        `skip_if`: the line is dropped, and its request stopped, if skip_if() turns true before the line has come
+        (a tool turn's answer that is ready first, I-30)."""
+        dropped = threading.Event()
 
-    def _make_filler(self, section, user):
-        """("text", line), then ("audio", chunk)...: the line from the filler LLM, then its TTS."""
+        def stop():
+            return self.stop() or dropped.is_set()
+        return (yield from self._relay(spawn(lambda: self._make_filler(section, user, stop)), skip_if, dropped))
+
+    def _make_filler(self, section, user, stop):
+        """("text", line), then ("audio", chunk)...: the line from the filler LLM, then its TTS, until stop()."""
         p = self.m.prompts["filler"]
         msgs = with_shots(p.text(section, "system"), p.shots(section), user)
-        line = text_of(self.m.llms["filler"].stream(msgs, max_new=24, stop_flag=self.stop)).strip()
-        if not line or self.stop():
+        line = text_of(self.m.llms["filler"].stream(msgs, max_new=24, stop_flag=stop)).strip()
+        if not line or stop():
             return
         yield ("text", line)
-        yield from (("audio", w) for w in speech_audio(self.m.tts, line, self.voice, self.stop))
+        yield from (("audio", w) for w in speech_audio(self.m.tts, line, self.voice, stop))
 
-    def _relay(self, q):
-        """Yield a filler's items from its helper thread as this turn's reply; returns the filler line."""
+    def _relay(self, q, skip_if=None, dropped=None):
+        """Yield a filler's items from its helper thread as this turn's reply; returns the filler line. Before the
+        line has come, skip_if() true drops it (sets `dropped`, which stops its helper thread) and returns None."""
         line = None; first = True
         while not self.stop():
+            if line is None and skip_if is not None and skip_if():
+                dropped.set()
+                return None
             try:
                 x = q.get(timeout=0.005)
             except queue.Empty:

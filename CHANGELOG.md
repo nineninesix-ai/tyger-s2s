@@ -91,6 +91,8 @@ Everything since the imported v1 baseline. It becomes the first release.
 - A first start no longer risks running the machine out of memory while it compiles GPU kernels.
 - The expert's typographic apostrophes and quotes (’ “ ”) reach the voice as written, not as spaces ("I’d" was said
   "I d").
+- A tool turn's answer no longer waits for its lead-in: it's asked for as soon as the tool is back, and a slow
+  lead-in is dropped (with an online model, a slow one left up to 2.4 s of silence).
 
 ### Removed
 - **The tyger 1.0 heads** (`nemotron-tyger-1.0`, a Qwen3-0.6B decoder on nemotron): `tyger` replaces them.

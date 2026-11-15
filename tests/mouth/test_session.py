@@ -9,6 +9,7 @@ from fakes import FakeLLM, FakeTTS, FakeMouth, PROMPTS, make_session, run_turn, 
 from app import mouth as M  # noqa: E402
 from app.mouth.messages import reply_prefix  # noqa: E402
 from app.mouth.turns import MAX_STILL, FILLER_GAP_S  # noqa: E402
+from app.plugins.llm.fake import wait_or_stop  # noqa: E402
 from app.wire import send_msg, recv_msg  # noqa: E402
 
 TOOL_REPLY = '<tool_call>\n{"name": "get_weather", "arguments": {"location": "Paris"}}\n</tool_call>'
@@ -236,6 +237,48 @@ def test_barge_during_filler_halts_within_a_chunk():
     assert t_done - t_stop < 0.05
     time.sleep(0.05)
     assert tts.live == 0 and tts.aborted >= 1, "filler TTS still running after the barge"
+
+
+def test_answer_requested_under_the_leadin():
+    """I-30: the reply model's answer from the results is asked for as soon as they're in, not after the lead-in has
+    been spoken (with a hosted reply, that's one more round trip after it)."""
+    t = {}
+
+    class Timed(FakeLLM):
+        def stream(self, messages, **kw):
+            if self._kind(messages) == "phase_b":
+                t.setdefault("phase_b", time.perf_counter())
+            yield from super().stream(messages, **kw)
+    llm = Timed(reply=TOOL_REPLY)
+    s, m = make_session(llm, FakeTTS(n=10, step_s=0.03))                # lead-in audio takes 0.3 s
+    with slow_tools(0.02):
+        evs, _ = run_turn(s, "weather in Paris?")
+    audio = [tt for k, v, tt in evs if k == "audio"]
+    assert m.tts.requests[0] == llm.leadin, m.tts.requests                # the lead-in came first: spoken first
+    assert t["phase_b"] < audio[5], "the answer's request waited for the lead-in"
+    assert evs[-1][0] == "done" and s.history.messages[-1]["content"].startswith("It is sunny")
+
+
+def test_slow_leadin_doesnt_hold_up_the_answer():
+    """I-30: a lead-in slower than the answer (a hosted filler's slow moment) is dropped, its request stopped, and the
+    answer is spoken as soon as it comes, not after the lead-in (or the filler's timeout)."""
+    class SlowLeadin(FakeLLM):
+        def stream(self, messages, stop_flag=None, **kw):
+            if self._kind(messages) == "leadin" and wait_or_stop(1.0, stop_flag):
+                self.dropped = True; return
+            yield from super().stream(messages, stop_flag=stop_flag, **kw)
+    llm = SlowLeadin(reply=TOOL_REPLY); llm.dropped = False
+    s, m = make_session(llm, FakeTTS(n=3))
+    with slow_tools(0.02):
+        t0 = time.perf_counter()
+        evs, _ = run_turn(s, "weather in Paris?")
+    first_audio = next(tt for k, _, tt in evs if k == "audio") - t0
+    assert first_audio < 0.5, f"first audio at {1e3 * first_audio:.0f} ms: it waited for the lead-in"
+    assert m.tts.requests and m.tts.requests[0].startswith("It is sunny"), m.tts.requests
+    assert llm.leadin not in m.tts.requests and llm.leadin not in [v for k, v, _ in evs if k == "text"]
+    time.sleep(0.05)
+    assert llm.dropped, "the dropped lead-in's request kept running"
+    assert s.history.messages[-1]["content"].startswith("It is sunny")
 
 
 def test_model_words_before_tag_replace_filler():
